@@ -15,10 +15,10 @@ data OPAM
   = OPAM
   { name :: Maybe String
   , version :: Maybe String
-  , nativeBuildInputs :: Maybe [String]
-  , buildInputs :: Maybe [String]
+  , nativeBuildInputs :: [String]
+  , buildInputs :: [String]
   , buildPhase :: Maybe [[String]]
-  , checkInputs :: Maybe [String]
+  , checkInputs :: [String]
   , checkPhase :: Maybe [[String]]
   , installPhase :: Maybe [[String]]
   , source :: Maybe String
@@ -31,19 +31,18 @@ opam2nix OPAM {..} =
     normalize = nub . map (\case 'b':'a':'s':'e':'-':_ -> "base"; s -> s)
     buildInputs' = [ "findlib" ]
       -- conf-* packages are added with {build}, hack it so that it builds!
-      ++ (filter (isPrefixOf "conf-") $ mconcat $ maybeToList nativeBuildInputs)
-      ++ mconcat (maybeToList buildInputs);
-    checkInputs' = mconcat $ maybeToList checkInputs
+      ++ (filter (isPrefixOf "conf-") $ nativeBuildInputs)
+      ++ buildInputs;
     nativeBuildInputs' = [ "dune", "opaline", "ocaml", "findlib" ]
       ++ (if any (isPrefixOf "conf-")
-           (buildInputs' ++ checkInputs' ++ mconcat (maybeToList nativeBuildInputs))
+           (buildInputs' ++ checkInputs ++ nativeBuildInputs)
            then ["conf-pkg-config"]
            else [])
-      ++ mconcat (maybeToList nativeBuildInputs)
+      ++ nativeBuildInputs
     installPhase' = case installPhase of
       Just c -> "mkdir -p $OCAMLFIND_DESTDIR\n" <> preparephase c
       Nothing -> "opaline -prefix $out -libdir $OCAMLFIND_DESTDIR"
-    inputs = buildInputs' ++ checkInputs' ++ nativeBuildInputs'
+    inputs = buildInputs' ++ checkInputs ++ nativeBuildInputs'
     deps = mconcat $ intersperse ", " $ normalize $ inputs
     sepspace = mconcat . intersperse " " . normalize
     quote s = "\""<>s<>"\""
@@ -56,7 +55,7 @@ opam2nix OPAM {..} =
   <>foldMap (\url -> "  src = builtins.fetchTarball { url = \""<>url<>"\"; };\n") source
   <>"  outputs = [ \"out\" \"bin\" \"lib\" \"share\" ];\n"
   <>"  buildInputs = [ "<>sepspace buildInputs'<>" ];\n"
-  <>"  checkInputs = [ "<>sepspace checkInputs'<>" ];\n"
+  <>"  checkInputs = [ "<>sepspace checkInputs<>" ];\n"
   <>"  nativeBuildInputs = [ "<>sepspace nativeBuildInputs'<>" ];\n"
   <>"  propagatedBuildInputs = buildInputs;\n"
   <>"  propagatedNativeBuildInputs = nativeBuildInputs;\n"
@@ -85,15 +84,8 @@ evaluateField :: OPAM -> Field -> OPAM
 evaluateField o@OPAM {..} = \case
   Name s -> o { name = update name s }
   Version s -> o { version = update version s }
-  Depends s -> o {
-    buildInputs = update buildInputs $
-      fmap identifier $ filter (\(Package _ info) ->
-                                  not $ ("with-test" `elem` info || "build" `elem` info)) s,
-    nativeBuildInputs = update nativeBuildInputs $
-      fmap identifier $ filter (\(Package _ info) -> "build" `elem` info) s,
-    checkInputs = update checkInputs $
-      fmap identifier $ filter (\(Package _ info) -> "with-test" `elem` info) s
-  }
+  Depends s -> updateDeps s o
+  OptionallyDepends s -> updateDeps s o
   Build e -> o {
     buildPhase = update buildPhase
       $ fmap ((fmap evaluateExp) . command) $ filter (\(Command _ info) -> not $ "with-test" `elem` info) e,
@@ -105,6 +97,17 @@ evaluateField o@OPAM {..} = \case
   }
   URL url -> o { source = update source url}
   Other _ -> o
+  where
+    updateDeps :: [Package] -> OPAM -> OPAM
+    updateDeps packages o@OPAM {..} = o
+      { buildInputs = buildInputs <>
+        (fmap identifier $ filter (\(Package _ info) ->
+                                    not $ ("with-test" `elem` info || "build" `elem` info)) packages)
+      , nativeBuildInputs = nativeBuildInputs <>
+        (fmap identifier $ filter (\(Package _ info) -> "build" `elem` info) packages)
+      , checkInputs = checkInputs <>
+        (fmap identifier $ filter (\(Package _ info) -> "with-test" `elem` info) packages)
+      }
 
 evaluateFields :: OPAM -> [Field] -> OPAM
 evaluateFields = foldl evaluateField
@@ -157,6 +160,7 @@ data Field
   = Name String
   | Version String
   | Depends [Package]
+  | OptionallyDepends [Package]
   | Build [Command]
   | Install [Command]
   | URL String
@@ -173,6 +177,7 @@ field :: ParsecT String u Identity Field
 field = Name <$> fieldParser "name" stringParser
     <|> Version <$> fieldParser "version" stringParser
     <|> Depends <$> fieldParser "depends" (listParser packageParser)
+    <|> OptionallyDepends <$> fieldParser "depopts" (listParser packageParser)
     <|> Build <$> fieldParser "build" (pure <$> try commandParser <|> listParser commandParser)
     <|> Install <$> fieldParser "install" (pure <$> try commandParser <|> listParser commandParser)
     <|> sectionParser "url" (URL <$> ((fieldParser "src" stringParser <|> fieldParser "archive" stringParser) <* many (noneOf "}")))
@@ -240,4 +245,4 @@ main = do
   getContents >>= \s -> case parse opamFile "(unknown)" s of
     Left e -> print e
     Right fs -> putStrLn $ opam2nix $ evaluateFields
-      (OPAM Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing) fs
+      (OPAM Nothing Nothing [] [] Nothing [] Nothing Nothing Nothing) fs
