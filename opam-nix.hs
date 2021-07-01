@@ -36,8 +36,7 @@ data PackageInputs = PackageInputs
 printInputs :: PackageInputs -> String
 printInputs PackageInputs{..} =
   "{ stdenv, fetchurl, lib"
-  <> pPrintInputs piNativeBuildInputs
-  <> pPrintInputs piBuildInputs
+  pPrintInputs (union piNativeBuildInputs piBuildInputs))
   <> pPrintInputs (Set.map (<>" ? null") onlyCheckInputs)
   <> ", extraArgs ? { } }@args:\n"
   where
