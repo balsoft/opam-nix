@@ -37,12 +37,12 @@ printInputs :: PackageInputs -> String
 printInputs PackageInputs{..} =
   "{ stdenv, fetchurl, lib"
   <> pPrintInputs piNativeBuildInputs
-  <> pPrintInputs onlyBuildInputs
-  <> pPrintInputs (Set.map (<>" ? null") piCheckInputs)
+  <> pPrintInputs piBuildInputs
+  <> pPrintInputs (Set.map (<>" ? null") onlyCheckInputs)
   <> ", extraArgs ? { } }@args:\n"
   where
     -- to avoide duplicates
-    onlyBuildInputs = (piBuildInputs `difference` piCheckInputs) `difference` piNativeBuildInputs
+    onlyCheckInputs = (piCheckInputs `difference` piBuildInputs) `difference` piNativeBuildInputs
     sepcoma :: [String] -> String
     sepcoma = intercalate ", "
     pPrintInputs :: Set String -> String
