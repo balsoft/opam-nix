@@ -4,12 +4,15 @@
 
 {-# LANGUAGE FlexibleContexts, LambdaCase, RecordWildCards #-}
 
-import Text.Parsec
-import Data.Functor.Identity (Identity ())
-import System.IO
-import Data.Maybe (catMaybes, isNothing, maybeToList)
 import Control.Monad (void)
-import Data.List (stripPrefix, intersperse, nub, isSuffixOf, isPrefixOf)
+import Data.Bool (bool)
+import Data.Functor.Identity (Identity ())
+import Data.List (stripPrefix, intercalate, intersperse, nub, isSuffixOf, isPrefixOf)
+import Data.Maybe (catMaybes, isNothing, maybeToList)
+import Data.Set (Set, difference, fromList, toList, union)
+import qualified Data.Set as Set (map)
+import System.IO
+import Text.Parsec
 
 data OPAM
   = OPAM
@@ -23,6 +26,30 @@ data OPAM
   , installPhase :: Maybe [[String]]
   , source :: Maybe (String, [Hash])
   } deriving Show
+
+data PackageInputs = PackageInputs
+  { piNativeBuildInputs :: Set String
+  , piBuildInputs :: Set String
+  , piCheckInputs :: Set String
+  }
+
+printInputs :: PackageInputs -> String
+printInputs PackageInputs{..} =
+  "{ stdenv, fetchurl, lib"
+  <> pPrintInputs (union piNativeBuildInputs piBuildInputs)
+  <> pPrintInputs (Set.map (<>" ? null") onlyCheckInputs)
+  <> ", extraArgs ? { } }@args:\n"
+  where
+    -- to avoide duplicates
+    onlyCheckInputs = (piCheckInputs `difference` piBuildInputs) `difference` piNativeBuildInputs
+    sepcoma :: [String] -> String
+    sepcoma = intercalate ", "
+    pPrintInputs :: Set String -> String
+    pPrintInputs inputs =
+      bool "" (", " <> sepcoma (map normalizeInput $ toList inputs)) $ not $ null inputs
+    normalizeInput input
+      | "base-" `isPrefixOf` input = "base"
+      | otherwise = input
 
 -- Turn a description into a nix file
 opam2nix :: OPAM -> String
@@ -43,13 +70,16 @@ opam2nix OPAM {..} =
     installPhase' = case installPhase of
       Just c -> "mkdir -p $OCAMLFIND_DESTDIR\n" <> preparephase c
       Nothing -> "opaline -prefix $out -libdir $OCAMLFIND_DESTDIR"
-    inputs = buildInputs' ++ checkInputs' ++ nativeBuildInputs'
-    deps = mconcat $ intersperse ", " $ normalize $ inputs
     sepspace = mconcat . intersperse " " . normalize
     quote s = "\""<>s<>"\""
     preparephase = mconcat . intersperse " "  . mconcat . intersperse ["\n"] . (fmap . fmap) quote
+    packageInputs = PackageInputs
+      { piNativeBuildInputs = fromList nativeBuildInputs'
+      , piBuildInputs = fromList buildInputs'
+      , piCheckInputs = fromList checkInputs'
+      }
   in
-    "{ stdenv, fetchurl, lib, " <>deps<> ", extraArgs ? { } }@args:\n"
+    printInputs packageInputs
   <>"stdenv.mkDerivation (let self = with self; with extraArgs; {\n"
   <>foldMap (\name' -> "  pname = \""<>name'<>"\";\n") name
   <>foldMap (\version' -> "  version = \""<>version'<>"\";\n") version
