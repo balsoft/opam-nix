@@ -9,7 +9,7 @@ import Data.Bool (bool)
 import Data.Functor.Identity (Identity ())
 import Data.List (stripPrefix, intercalate, intersperse, nub, isSuffixOf, isPrefixOf)
 import Data.Maybe (catMaybes, isNothing, maybeToList)
-import Data.Set (Set, difference, fromList, toList)
+import Data.Set (Set, difference, fromList, toList, union)
 import qualified Data.Set as Set (map)
 import System.IO
 import Text.Parsec
@@ -36,7 +36,7 @@ data PackageInputs = PackageInputs
 printInputs :: PackageInputs -> String
 printInputs PackageInputs{..} =
   "{ stdenv, fetchurl, lib"
-  pPrintInputs (union piNativeBuildInputs piBuildInputs)
+  <> pPrintInputs (union piNativeBuildInputs piBuildInputs)
   <> pPrintInputs (Set.map (<>" ? null") onlyCheckInputs)
   <> ", extraArgs ? { } }@args:\n"
   where
